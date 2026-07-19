@@ -1,8 +1,16 @@
-import streamlit as st
-import pandas as pd
-import random
+import io
 import json
-from datetime import datetime
+import random
+from datetime import datetime, date
+
+import pandas as pd
+import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 # ============================================================
 # CONFIGURAÇÃO
@@ -11,6 +19,10 @@ st.set_page_config(page_title="Super 12 - Beach Tênis", page_icon="🎾", layou
 
 # Troque esse PIN antes de compartilhar o link do app!
 ORGANIZER_PIN = "1234"
+
+OURO = colors.HexColor("#D4AF37")
+PRATA = colors.HexColor("#A8A9AD")
+BRONZE = colors.HexColor("#AD8A56")
 
 # ============================================================
 # ESTADO
@@ -21,6 +33,7 @@ def init_state():
         "schedule": None,        # calendário completo: lista de rodadas -> lista de duplas [nome1, nome2]
         "rounds": [],            # rodadas já geradas: [{"partidas": [...], "folgantes": [...]}, ...]
         "is_organizer": False,
+        "tournament_date": date.today(),
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -147,6 +160,104 @@ def montar_tabela_historico():
 
 
 # ============================================================
+# EXPORTAÇÃO EM PDF DA CLASSIFICAÇÃO (pódio + tabela completa)
+# ============================================================
+def _bloco_podio(label, nome, pontos, cor, altura_cm, largura_cm=5.2):
+    styles = getSampleStyleSheet()
+    label_style = ParagraphStyle("label", parent=styles["Normal"], alignment=TA_CENTER,
+                                  fontName="Helvetica-Bold", fontSize=13, textColor=colors.white, leading=15)
+    nome_style = ParagraphStyle("nome", parent=styles["Normal"], alignment=TA_CENTER,
+                                 fontName="Helvetica-Bold", fontSize=11, textColor=colors.white, leading=13)
+    pts_style = ParagraphStyle("pts", parent=styles["Normal"], alignment=TA_CENTER,
+                                fontName="Helvetica", fontSize=9, textColor=colors.white)
+
+    conteudo = [
+        [Paragraph(label, label_style)],
+        [Paragraph(nome, nome_style)],
+        [Paragraph(f"{pontos} pts", pts_style)],
+    ]
+    linha_txt = 0.9 * cm
+    preenchimento = max(altura_cm * cm - 3 * linha_txt, 0.3 * cm)
+    tbl = Table(conteudo, colWidths=[largura_cm * cm], rowHeights=[linha_txt, linha_txt, linha_txt])
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), cor),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (0, 0), preenchimento),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.white),
+    ]))
+    return tbl
+
+
+def gerar_pdf_classificacao(df, data_torneio_str):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4,
+                             topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+                             leftMargin=1.5 * cm, rightMargin=1.5 * cm)
+    styles = getSampleStyleSheet()
+    titulo_style = ParagraphStyle("titulo", parent=styles["Title"], fontSize=20, spaceAfter=2)
+    sub_style = ParagraphStyle("sub", parent=styles["Normal"], fontSize=10, textColor=colors.grey)
+
+    story = []
+    story.append(Paragraph("Super 12 - Beach Tênis", titulo_style))
+    story.append(Paragraph("Classificação Geral", styles["Heading2"]))
+    agora = datetime.now().strftime("%d/%m/%Y às %H:%M")
+    story.append(Paragraph(f"Data do torneio: {data_torneio_str}", sub_style))
+    story.append(Paragraph(f"PDF gerado em: {agora}", sub_style))
+    story.append(Spacer(1, 20))
+
+    # PÓDIO (1º, 2º, 3º colocados)
+    top = df.reset_index().head(3)
+    if len(top) >= 1:
+        blocos = [None, None, None]
+        alturas = [3.4, 2.7, 2.1]
+        cores = [OURO, PRATA, BRONZE]
+        labels = ["1º LUGAR", "2º LUGAR", "3º LUGAR"]
+        for i in range(min(3, len(top))):
+            row = top.iloc[i]
+            blocos[i] = _bloco_podio(labels[i], row["Jogador"], int(row["pontos"]), cores[i], alturas[i])
+
+        ordem = [blocos[1], blocos[0], blocos[2]]  # visual: 2º, 1º, 3º
+        ordem = [b for b in ordem if b is not None]
+        podio_tbl = Table([ordem], colWidths=[5.4 * cm] * len(ordem))
+        podio_tbl.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(podio_tbl)
+        story.append(Spacer(1, 24))
+
+    # TABELA COMPLETA COM TODAS AS COLUNAS
+    df_show = df.reset_index().rename(columns={
+        "pontos": "Pontos", "vitorias": "Vitórias", "derrotas": "Derrotas",
+        "jogos": "Jogos", "saldo": "Saldo", "folgas": "Folgas",
+    })
+    colunas = ["Pos", "Jogador", "Pontos", "Vitórias", "Derrotas", "Jogos", "Saldo", "Folgas"]
+    dados = [colunas] + [[str(row[c]) for c in colunas] for _, row in df_show.iterrows()]
+
+    tabela = Table(dados, colWidths=[1.3 * cm, 4 * cm, 1.8 * cm, 2 * cm, 2 * cm, 1.6 * cm, 1.6 * cm, 1.8 * cm],
+                    repeatRows=1)
+    tabela.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (1, 1), (1, -1), "LEFT"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F2F2")]),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(tabela)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+# ============================================================
 # BACKUP
 # ============================================================
 def exportar_backup():
@@ -154,6 +265,7 @@ def exportar_backup():
         "players": st.session_state.players,
         "schedule": st.session_state.schedule,
         "rounds": st.session_state.rounds,
+        "tournament_date": st.session_state.tournament_date.isoformat(),
     }
     return json.dumps(data, ensure_ascii=False, indent=2)
 
@@ -163,6 +275,8 @@ def importar_backup(file):
     st.session_state.players = data.get("players", [])
     st.session_state.schedule = data.get("schedule")
     st.session_state.rounds = data.get("rounds", [])
+    if data.get("tournament_date"):
+        st.session_state.tournament_date = date.fromisoformat(data["tournament_date"])
 
 
 # ============================================================
@@ -358,6 +472,14 @@ with aba_hist:
 # ============================================================
 with aba_class:
     st.subheader("Classificação geral")
+
+    if st.session_state.is_organizer:
+        st.session_state.tournament_date = st.date_input(
+            "Data do torneio", value=st.session_state.tournament_date
+        )
+    else:
+        st.caption(f"Data do torneio: {st.session_state.tournament_date.strftime('%d/%m/%Y')}")
+
     if not st.session_state.players:
         st.info("Nenhum jogador cadastrado ainda.")
     else:
@@ -372,3 +494,12 @@ with aba_class:
         )
         if st.session_state.schedule is not None:
             st.caption(f"Rodadas jogadas: {len(st.session_state.rounds)} de {len(st.session_state.schedule)}")
+
+        data_str = st.session_state.tournament_date.strftime("%d/%m/%Y")
+        pdf_buffer = gerar_pdf_classificacao(df, data_str)
+        st.download_button(
+            "📄 Baixar classificação em PDF",
+            data=pdf_buffer,
+            file_name=f"classificacao_super12_{st.session_state.tournament_date.strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+        )
