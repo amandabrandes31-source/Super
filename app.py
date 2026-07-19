@@ -1,6 +1,7 @@
 import io
 import json
 import random
+import threading
 from datetime import datetime, date
 
 import pandas as pd
@@ -13,6 +14,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import (BaseDocTemplate, Frame, NextPageTemplate, PageBreak,
                                  PageTemplate, Paragraph, Spacer, Table, TableStyle)
+from streamlit_autorefresh import st_autorefresh
 
 # ============================================================
 # CONFIGURAÇÃO
@@ -30,21 +32,29 @@ BRONZE = colors.HexColor("#AD8A56")
 BRONZE_BORDA = colors.HexColor("#7A5F3B")
 
 # ============================================================
-# ESTADO
+# ESTADO COMPARTILHADO
+# Guardado com st.cache_resource: um único objeto vivo na memória
+# do servidor, visto por TODO MUNDO que acessa o app (não é por
+# navegador). É isso que permite compartilhar o link e todo mundo
+# ver o mesmo torneio ao vivo.
 # ============================================================
-def init_state():
-    defaults = {
-        "players": [],           # lista de nomes
-        "schedule": None,        # calendário completo: lista de rodadas -> lista de duplas [nome1, nome2]
-        "rounds": [],            # rodadas já geradas: [{"partidas": [...], "folgantes": [...]}, ...]
-        "is_organizer": False,
+@st.cache_resource
+def get_shared_state():
+    return {
+        "players": [],
+        "schedule": None,
+        "rounds": [],
         "tournament_date": date.today(),
+        "lock": threading.Lock(),
     }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
 
-init_state()
+
+shared = get_shared_state()
+
+# is_organizer fica em session_state (por navegador/pessoa) de propósito:
+# cada visitante decide individualmente se está logado como organizador.
+if "is_organizer" not in st.session_state:
+    st.session_state.is_organizer = False
 
 
 # ============================================================
@@ -105,9 +115,9 @@ def montar_partidas_e_folgas(players, pares):
 # ============================================================
 def calcular_classificacao():
     stats = {p: {"pontos": 0, "vitorias": 0, "derrotas": 0, "jogos": 0, "saldo": 0, "folgas": 0}
-              for p in st.session_state.players}
+              for p in shared["players"]}
 
-    for rodada in st.session_state.rounds:
+    for rodada in shared["rounds"]:
         for p in rodada.get("folgantes", []):
             if p in stats:
                 stats[p]["folgas"] += 1
@@ -143,15 +153,15 @@ def montar_matriz_pontos_por_rodada():
     """Para cada jogador (ordem alfabética), lista os pontos conquistados em
     cada rodada (None se ele estava de folga ou a rodada ainda não tem
     placar), mais total de pontos, vitórias e derrotas."""
-    n_rodadas = len(st.session_state.rounds)
-    jogadores = sorted(st.session_state.players)
+    n_rodadas = len(shared["rounds"])
+    jogadores = sorted(shared["players"])
     linhas = []
     for jogador in jogadores:
         pontos_por_rodada = []
         total = 0
         vitorias = 0
         derrotas = 0
-        for rodada in st.session_state.rounds:
+        for rodada in shared["rounds"]:
             pontos_rodada = None
             for m in rodada["partidas"]:
                 if m["placar1"] is None or m["placar2"] is None:
@@ -178,7 +188,7 @@ def montar_matriz_pontos_por_rodada():
 
 def montar_tabela_historico():
     linhas = []
-    for i, rodada in enumerate(st.session_state.rounds, start=1):
+    for i, rodada in enumerate(shared["rounds"], start=1):
         for m in rodada["partidas"]:
             if m["placar1"] is not None and m["placar2"] is not None:
                 placar = f"{m['placar1']} x {m['placar2']}"
@@ -366,21 +376,21 @@ def gerar_pdf_classificacao(df, data_torneio_str):
 # ============================================================
 def exportar_backup():
     data = {
-        "players": st.session_state.players,
-        "schedule": st.session_state.schedule,
-        "rounds": st.session_state.rounds,
-        "tournament_date": st.session_state.tournament_date.isoformat(),
+        "players": shared["players"],
+        "schedule": shared["schedule"],
+        "rounds": shared["rounds"],
+        "tournament_date": shared["tournament_date"].isoformat(),
     }
     return json.dumps(data, ensure_ascii=False, indent=2)
 
 
 def importar_backup(file):
     data = json.loads(file.read().decode("utf-8"))
-    st.session_state.players = data.get("players", [])
-    st.session_state.schedule = data.get("schedule")
-    st.session_state.rounds = data.get("rounds", [])
+    shared["players"] = data.get("players", [])
+    shared["schedule"] = data.get("schedule")
+    shared["rounds"] = data.get("rounds", [])
     if data.get("tournament_date"):
-        st.session_state.tournament_date = date.fromisoformat(data["tournament_date"])
+        shared["tournament_date"] = date.fromisoformat(data["tournament_date"])
 
 
 # ============================================================
@@ -407,8 +417,8 @@ with st.sidebar:
         st.caption("Apaga rodadas e calendário, mantém os jogadores cadastrados.")
         if st.checkbox("Confirmo que quero reiniciar"):
             if st.button("🔄 Reiniciar torneio"):
-                st.session_state.schedule = None
-                st.session_state.rounds = []
+                shared["schedule"] = None
+                shared["rounds"] = []
                 st.rerun()
 
     st.divider()
@@ -431,6 +441,12 @@ with st.sidebar:
 # ============================================================
 st.title("🎾 Super 12 - Beach Tênis")
 
+if not st.session_state.is_organizer:
+    # Atualiza a tela sozinha a cada 15s para quem só está acompanhando,
+    # sem precisar recarregar a página manualmente.
+    st_autorefresh(interval=15_000, key="viewer_autorefresh")
+    st.caption("🔴 Ao vivo — atualiza automaticamente a cada 15s")
+
 if st.session_state.is_organizer:
     aba_jog, aba_rodada, aba_placar, aba_hist, aba_class = st.tabs(
         ["Jogadores", "Gerar Rodada", "Registrar Placar", "Histórico", "Classificação"]
@@ -444,29 +460,29 @@ else:
 if st.session_state.is_organizer:
     with aba_jog:
         st.subheader("Jogadores")
-        torneio_iniciado = len(st.session_state.rounds) > 0
+        torneio_iniciado = len(shared["rounds"]) > 0
 
         if torneio_iniciado:
             st.info("🔒 Lista travada — o torneio já começou (para não quebrar o calendário "
                     "de rodadas). Use 'Reiniciar torneio' na barra lateral para editar.")
-            for p in st.session_state.players:
+            for p in shared["players"]:
                 st.write(f"• {p}")
         else:
             novo = st.text_input("Nome do jogador", key="novo_jogador")
             if st.button("Adicionar jogador"):
                 nome = novo.strip()
-                if nome and nome not in st.session_state.players:
-                    st.session_state.players.append(nome)
+                if nome and nome not in shared["players"]:
+                    shared["players"].append(nome)
                     st.rerun()
 
-            if st.session_state.players:
-                for p in st.session_state.players:
+            if shared["players"]:
+                for p in shared["players"]:
                     c1, c2 = st.columns([4, 1])
                     c1.write(p)
                     if c2.button("Remover", key=f"rm_{p}"):
-                        st.session_state.players.remove(p)
+                        shared["players"].remove(p)
                         st.rerun()
-                st.caption(f"Total: {len(st.session_state.players)} jogador(es). "
+                st.caption(f"Total: {len(shared["players"])} jogador(es). "
                            f"Ideal: múltiplo de 4 (ex: 8, 12, 16).")
             else:
                 st.info("Nenhum jogador cadastrado ainda.")
@@ -477,7 +493,7 @@ if st.session_state.is_organizer:
 if st.session_state.is_organizer:
     with aba_rodada:
         st.subheader("Gerar rodada")
-        n = len(st.session_state.players)
+        n = len(shared["players"])
 
         if n < 4:
             st.warning("Cadastre pelo menos 4 jogadores para gerar rodadas.")
@@ -486,13 +502,13 @@ if st.session_state.is_organizer:
             # jogadores daquele momento). Antes disso, mostramos apenas uma
             # prévia do total de rodadas, que pode mudar se você ainda
             # estiver adicionando/removendo jogadores.
-            if st.session_state.schedule is not None:
-                total_rodadas = len(st.session_state.schedule)
+            if shared["schedule"] is not None:
+                total_rodadas = len(shared["schedule"])
             else:
                 total_rodadas = (n - 1) if n % 2 == 0 else n
 
-            rodadas_geradas = len(st.session_state.rounds)
-            torneio_completo = st.session_state.schedule is not None and rodadas_geradas >= total_rodadas
+            rodadas_geradas = len(shared["rounds"])
+            torneio_completo = shared["schedule"] is not None and rodadas_geradas >= total_rodadas
 
             if torneio_completo:
                 st.success("🏁 Torneio completo! Todo mundo já jogou com todo mundo. "
@@ -500,20 +516,20 @@ if st.session_state.is_organizer:
             else:
                 st.progress(rodadas_geradas / total_rodadas if total_rodadas else 0)
                 st.caption(f"Rodada {rodadas_geradas + 1} de {total_rodadas}")
-                if st.session_state.schedule is None:
+                if shared["schedule"] is None:
                     st.caption(f"({n} jogadores cadastrados — o calendário será fixado ao sortear a 1ª rodada)")
                 if st.button("🔀 Sortear próxima rodada"):
-                    if st.session_state.schedule is None:
-                        st.session_state.schedule = gerar_calendario_completo(st.session_state.players)
-                    pares = st.session_state.schedule[rodadas_geradas]
-                    partidas, folgantes = montar_partidas_e_folgas(st.session_state.players, pares)
-                    st.session_state.rounds.append({"partidas": partidas, "folgantes": folgantes})
+                    if shared["schedule"] is None:
+                        shared["schedule"] = gerar_calendario_completo(shared["players"])
+                    pares = shared["schedule"][rodadas_geradas]
+                    partidas, folgantes = montar_partidas_e_folgas(shared["players"], pares)
+                    shared["rounds"].append({"partidas": partidas, "folgantes": folgantes})
                     st.rerun()
 
-        if st.session_state.rounds:
+        if shared["rounds"]:
             st.divider()
-            idx = len(st.session_state.rounds) - 1
-            ultima = st.session_state.rounds[idx]
+            idx = len(shared["rounds"]) - 1
+            ultima = shared["rounds"][idx]
             st.markdown(f"**Última rodada gerada: Rodada {idx + 1}**")
             for m in ultima["partidas"]:
                 st.write(f"Quadra {m['quadra']}: {' / '.join(m['time1'])}  🆚  {' / '.join(m['time2'])}")
@@ -526,13 +542,13 @@ if st.session_state.is_organizer:
 if st.session_state.is_organizer:
     with aba_placar:
         st.subheader("Registrar placar")
-        if not st.session_state.rounds:
+        if not shared["rounds"]:
             st.info("Gere uma rodada primeiro na aba 'Gerar Rodada'.")
         else:
-            opcoes = [f"Rodada {i+1}" for i in range(len(st.session_state.rounds))]
+            opcoes = [f"Rodada {i+1}" for i in range(len(shared["rounds"]))]
             escolha = st.selectbox("Selecione a rodada", opcoes, index=len(opcoes) - 1)
             idx = opcoes.index(escolha)
-            partidas = st.session_state.rounds[idx]["partidas"]
+            partidas = shared["rounds"][idx]["partidas"]
 
             for j, m in enumerate(partidas):
                 st.markdown(f"**Quadra {m['quadra']}**")
@@ -553,8 +569,8 @@ if st.session_state.is_organizer:
                         value=m["placar2"] if m["placar2"] is not None else 0,
                         key=f"p2_{idx}_{j}"
                     )
-                st.session_state.rounds[idx]["partidas"][j]["placar1"] = p1
-                st.session_state.rounds[idx]["partidas"][j]["placar2"] = p2
+                shared["rounds"][idx]["partidas"][j]["placar1"] = p1
+                shared["rounds"][idx]["partidas"][j]["placar2"] = p2
                 st.divider()
 
             if st.button("💾 Salvar placares desta rodada"):
@@ -565,7 +581,7 @@ if st.session_state.is_organizer:
 # ============================================================
 with aba_hist:
     st.subheader("Histórico de rodadas")
-    if not st.session_state.rounds:
+    if not shared["rounds"]:
         st.info("Nenhuma rodada gerada ainda.")
     else:
         df_hist = montar_tabela_historico()
@@ -578,13 +594,13 @@ with aba_class:
     st.subheader("Classificação geral")
 
     if st.session_state.is_organizer:
-        st.session_state.tournament_date = st.date_input(
-            "Data do torneio", value=st.session_state.tournament_date
+        shared["tournament_date"] = st.date_input(
+            "Data do torneio", value=shared["tournament_date"]
         )
     else:
-        st.caption(f"Data do torneio: {st.session_state.tournament_date.strftime('%d/%m/%Y')}")
+        st.caption(f"Data do torneio: {shared["tournament_date"].strftime('%d/%m/%Y')}")
 
-    if not st.session_state.players:
+    if not shared["players"]:
         st.info("Nenhum jogador cadastrado ainda.")
     else:
         df = calcular_classificacao()
@@ -596,14 +612,14 @@ with aba_class:
             width='stretch',
             hide_index=True,
         )
-        if st.session_state.schedule is not None:
-            st.caption(f"Rodadas jogadas: {len(st.session_state.rounds)} de {len(st.session_state.schedule)}")
+        if shared["schedule"] is not None:
+            st.caption(f"Rodadas jogadas: {len(shared["rounds"])} de {len(shared["schedule"])}")
 
-        data_str = st.session_state.tournament_date.strftime("%d/%m/%Y")
+        data_str = shared["tournament_date"].strftime("%d/%m/%Y")
         pdf_buffer = gerar_pdf_classificacao(df, data_str)
         st.download_button(
             "📄 Baixar classificação em PDF",
             data=pdf_buffer,
-            file_name=f"classificacao_super12_{st.session_state.tournament_date.strftime('%Y%m%d')}.pdf",
+            file_name=f"classificacao_super12_{shared["tournament_date"].strftime('%Y%m%d')}.pdf",
             mime="application/pdf",
         )
