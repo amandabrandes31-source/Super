@@ -176,7 +176,7 @@ def montar_matriz_pontos_por_rodada():
     return linhas, n_rodadas
 
 
-
+def montar_tabela_historico():
     linhas = []
     for i, rodada in enumerate(st.session_state.rounds, start=1):
         for m in rodada["partidas"]:
@@ -569,7 +569,7 @@ with aba_hist:
         st.info("Nenhuma rodada gerada ainda.")
     else:
         df_hist = montar_tabela_historico()
-        st.dataframe(df_hist, use_container_width=True, hide_index=True)
+        st.dataframe(df_hist, width='stretch', hide_index=True)
 
 # ============================================================
 # ABA CLASSIFICAÇÃO (todo mundo vê)
@@ -593,7 +593,7 @@ with aba_class:
                 "pontos": "Pontos", "vitorias": "Vitórias", "derrotas": "Derrotas",
                 "jogos": "Jogos", "saldo": "Saldo", "folgas": "Folgas"
             }),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
         if st.session_state.schedule is not None:
