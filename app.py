@@ -264,19 +264,29 @@ if st.session_state.is_organizer:
         if n < 4:
             st.warning("Cadastre pelo menos 4 jogadores para gerar rodadas.")
         else:
-            if st.session_state.schedule is None:
-                st.session_state.schedule = gerar_calendario_completo(st.session_state.players)
+            # O calendário só é fixado no clique do botão (com a lista de
+            # jogadores daquele momento). Antes disso, mostramos apenas uma
+            # prévia do total de rodadas, que pode mudar se você ainda
+            # estiver adicionando/removendo jogadores.
+            if st.session_state.schedule is not None:
+                total_rodadas = len(st.session_state.schedule)
+            else:
+                total_rodadas = (n - 1) if n % 2 == 0 else n
 
-            total_rodadas = len(st.session_state.schedule)
             rodadas_geradas = len(st.session_state.rounds)
+            torneio_completo = st.session_state.schedule is not None and rodadas_geradas >= total_rodadas
 
-            if rodadas_geradas >= total_rodadas:
+            if torneio_completo:
                 st.success("🏁 Torneio completo! Todo mundo já jogou com todo mundo. "
                            "Confira a Classificação final.")
             else:
-                st.progress(rodadas_geradas / total_rodadas)
+                st.progress(rodadas_geradas / total_rodadas if total_rodadas else 0)
                 st.caption(f"Rodada {rodadas_geradas + 1} de {total_rodadas}")
+                if st.session_state.schedule is None:
+                    st.caption(f"({n} jogadores cadastrados — o calendário será fixado ao sortear a 1ª rodada)")
                 if st.button("🔀 Sortear próxima rodada"):
+                    if st.session_state.schedule is None:
+                        st.session_state.schedule = gerar_calendario_completo(st.session_state.players)
                     pares = st.session_state.schedule[rodadas_geradas]
                     partidas, folgantes = montar_partidas_e_folgas(st.session_state.players, pares)
                     st.session_state.rounds.append({"partidas": partidas, "folgantes": folgantes})
