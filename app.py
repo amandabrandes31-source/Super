@@ -5,12 +5,14 @@ from datetime import datetime, date
 
 import pandas as pd
 import streamlit as st
+from reportlab.graphics.shapes import Circle, Drawing, String
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import (BaseDocTemplate, Frame, NextPageTemplate, PageBreak,
+                                 PageTemplate, Paragraph, Spacer, Table, TableStyle)
 
 # ============================================================
 # CONFIGURAÇÃO
@@ -21,8 +23,11 @@ st.set_page_config(page_title="Super 12 - Beach Tênis", page_icon="🎾", layou
 ORGANIZER_PIN = "1234"
 
 OURO = colors.HexColor("#D4AF37")
+OURO_BORDA = colors.HexColor("#8A6D1F")
 PRATA = colors.HexColor("#A8A9AD")
+PRATA_BORDA = colors.HexColor("#6E6F72")
 BRONZE = colors.HexColor("#AD8A56")
+BRONZE_BORDA = colors.HexColor("#7A5F3B")
 
 # ============================================================
 # ESTADO
@@ -134,7 +139,44 @@ def calcular_classificacao():
     return df
 
 
-def montar_tabela_historico():
+def montar_matriz_pontos_por_rodada():
+    """Para cada jogador (ordem alfabética), lista os pontos conquistados em
+    cada rodada (None se ele estava de folga ou a rodada ainda não tem
+    placar), mais total de pontos, vitórias e derrotas."""
+    n_rodadas = len(st.session_state.rounds)
+    jogadores = sorted(st.session_state.players)
+    linhas = []
+    for jogador in jogadores:
+        pontos_por_rodada = []
+        total = 0
+        vitorias = 0
+        derrotas = 0
+        for rodada in st.session_state.rounds:
+            pontos_rodada = None
+            for m in rodada["partidas"]:
+                if m["placar1"] is None or m["placar2"] is None:
+                    continue
+                if jogador in m["time1"]:
+                    pontos_rodada = m["placar1"]
+                    vitorias += 1 if m["placar1"] > m["placar2"] else 0
+                    derrotas += 1 if m["placar1"] < m["placar2"] else 0
+                    break
+                elif jogador in m["time2"]:
+                    pontos_rodada = m["placar2"]
+                    vitorias += 1 if m["placar2"] > m["placar1"] else 0
+                    derrotas += 1 if m["placar2"] < m["placar1"] else 0
+                    break
+            if pontos_rodada is not None:
+                total += pontos_rodada
+            pontos_por_rodada.append(pontos_rodada)
+        linhas.append({
+            "jogador": jogador, "pontos_por_rodada": pontos_por_rodada,
+            "total": total, "vitorias": vitorias, "derrotas": derrotas,
+        })
+    return linhas, n_rodadas
+
+
+
     linhas = []
     for i, rodada in enumerate(st.session_state.rounds, start=1):
         for m in rodada["partidas"]:
@@ -160,39 +202,61 @@ def montar_tabela_historico():
 
 
 # ============================================================
-# EXPORTAÇÃO EM PDF DA CLASSIFICAÇÃO (pódio + tabela completa)
+# EXPORTAÇÃO EM PDF DA CLASSIFICAÇÃO (pódio + tabela + histórico)
 # ============================================================
-def _bloco_podio(label, nome, pontos, cor, altura_cm, largura_cm=5.2):
-    styles = getSampleStyleSheet()
-    label_style = ParagraphStyle("label", parent=styles["Normal"], alignment=TA_CENTER,
-                                  fontName="Helvetica-Bold", fontSize=13, textColor=colors.white, leading=15)
-    nome_style = ParagraphStyle("nome", parent=styles["Normal"], alignment=TA_CENTER,
-                                 fontName="Helvetica-Bold", fontSize=11, textColor=colors.white, leading=13)
-    pts_style = ParagraphStyle("pts", parent=styles["Normal"], alignment=TA_CENTER,
-                                fontName="Helvetica", fontSize=9, textColor=colors.white)
+def _medalha(numero, cor_fundo, cor_borda, tamanho=1.5 * cm):
+    d = Drawing(tamanho, tamanho)
+    d.add(Circle(tamanho / 2, tamanho / 2, tamanho / 2 - 2,
+                  fillColor=cor_fundo, strokeColor=cor_borda, strokeWidth=2.2))
+    d.add(String(tamanho / 2, tamanho / 2 - 5.5, str(numero), fontSize=17,
+                  fillColor=colors.white, textAnchor="middle", fontName="Helvetica-Bold"))
+    return d
 
-    conteudo = [
-        [Paragraph(label, label_style)],
-        [Paragraph(nome, nome_style)],
-        [Paragraph(f"{pontos} pts", pts_style)],
-    ]
-    linha_txt = 0.9 * cm
-    preenchimento = max(altura_cm * cm - 3 * linha_txt, 0.3 * cm)
-    tbl = Table(conteudo, colWidths=[largura_cm * cm], rowHeights=[linha_txt, linha_txt, linha_txt])
-    tbl.setStyle(TableStyle([
+
+def _coluna_podio(numero, nome, pontos, cor, cor_borda, altura_barra_cm, largura_cm=5.0):
+    styles = getSampleStyleSheet()
+    nome_style = ParagraphStyle("nome", parent=styles["Normal"], alignment=TA_CENTER,
+                                 fontName="Helvetica-Bold", fontSize=12, leading=14,
+                                 spaceBefore=4, spaceAfter=2)
+    pts_style = ParagraphStyle("pts", parent=styles["Normal"], alignment=TA_CENTER,
+                                fontName="Helvetica-Bold", fontSize=11, textColor=colors.white)
+
+    barra = Table([[Paragraph(f"{pontos} pts", pts_style)]],
+                   colWidths=[largura_cm * cm], rowHeights=[altura_barra_cm * cm])
+    barra.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), cor),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (0, 0), preenchimento),
-        ("BOX", (0, 0), (-1, -1), 0.5, colors.white),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("BOX", (0, 0), (-1, -1), 0.75, cor_borda),
     ]))
-    return tbl
+
+    conteudo = [[_medalha(numero, cor, cor_borda)], [Paragraph(nome, nome_style)], [barra]]
+    col = Table(conteudo, colWidths=[largura_cm * cm])
+    col.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    return col
 
 
 def gerar_pdf_classificacao(df, data_torneio_str):
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4,
-                             topMargin=1.5 * cm, bottomMargin=1.5 * cm,
-                             leftMargin=1.5 * cm, rightMargin=1.5 * cm)
+    doc = BaseDocTemplate(buffer, pagesize=A4,
+                           topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+                           leftMargin=1.5 * cm, rightMargin=1.5 * cm)
+
+    frame_retrato = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="retrato")
+    largura_pais, altura_pais = landscape(A4)
+    margem_pais = 1.3 * cm
+    frame_paisagem = Frame(margem_pais, margem_pais, largura_pais - 2 * margem_pais,
+                            altura_pais - 2 * margem_pais, id="paisagem")
+    doc.addPageTemplates([
+        PageTemplate(id="Retrato", frames=[frame_retrato], pagesize=A4),
+        PageTemplate(id="Paisagem", frames=[frame_paisagem], pagesize=landscape(A4)),
+    ])
+
     styles = getSampleStyleSheet()
     titulo_style = ParagraphStyle("titulo", parent=styles["Title"], fontSize=20, spaceAfter=2)
     sub_style = ParagraphStyle("sub", parent=styles["Normal"], fontSize=10, textColor=colors.grey)
@@ -203,30 +267,30 @@ def gerar_pdf_classificacao(df, data_torneio_str):
     agora = datetime.now().strftime("%d/%m/%Y às %H:%M")
     story.append(Paragraph(f"Data do torneio: {data_torneio_str}", sub_style))
     story.append(Paragraph(f"PDF gerado em: {agora}", sub_style))
-    story.append(Spacer(1, 20))
+    story.append(Spacer(1, 26))
 
-    # PÓDIO (1º, 2º, 3º colocados)
+    # PÓDIO (alturas em degrau: 1º > 2º > 3º) com medalhas numeradas
     top = df.reset_index().head(3)
     if len(top) >= 1:
+        specs = [
+            (1, OURO, OURO_BORDA, 3.6),
+            (2, PRATA, PRATA_BORDA, 2.6),
+            (3, BRONZE, BRONZE_BORDA, 1.8),
+        ]
         blocos = [None, None, None]
-        alturas = [3.4, 2.7, 2.1]
-        cores = [OURO, PRATA, BRONZE]
-        labels = ["1º LUGAR", "2º LUGAR", "3º LUGAR"]
         for i in range(min(3, len(top))):
             row = top.iloc[i]
-            blocos[i] = _bloco_podio(labels[i], row["Jogador"], int(row["pontos"]), cores[i], alturas[i])
+            numero, cor, cor_borda, altura = specs[i]
+            blocos[i] = _coluna_podio(numero, row["Jogador"], int(row["pontos"]), cor, cor_borda, altura)
 
-        ordem = [blocos[1], blocos[0], blocos[2]]  # visual: 2º, 1º, 3º
-        ordem = [b for b in ordem if b is not None]
+        ordem = [b for b in [blocos[1], blocos[0], blocos[2]] if b is not None]
         podio_tbl = Table([ordem], colWidths=[5.4 * cm] * len(ordem))
         podio_tbl.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
             ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 4),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
         ]))
         story.append(podio_tbl)
-        story.append(Spacer(1, 24))
+        story.append(Spacer(1, 28))
 
     # TABELA COMPLETA COM TODAS AS COLUNAS
     df_show = df.reset_index().rename(columns={
@@ -251,6 +315,46 @@ def gerar_pdf_classificacao(df, data_torneio_str):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
     story.append(tabela)
+
+    # PÁGINA 2 (PAISAGEM) — HISTÓRICO DE PONTOS POR RODADA, POR JOGADOR
+    historico_matriz, n_rodadas = montar_matriz_pontos_por_rodada()
+    if n_rodadas > 0:
+        story.append(NextPageTemplate("Paisagem"))
+        story.append(PageBreak())
+        story.append(Paragraph("Histórico de Pontos por Rodada", styles["Heading2"]))
+        story.append(Spacer(1, 10))
+
+        header = ["Jogador"] + [f"R{i+1}" for i in range(n_rodadas)] + ["Total", "Vit.", "Der."]
+        dados2 = [header]
+        for linha in historico_matriz:
+            vals = [linha["jogador"]]
+            for p in linha["pontos_por_rodada"]:
+                vals.append(str(p) if p is not None else "-")
+            vals += [str(linha["total"]), str(linha["vitorias"]), str(linha["derrotas"])]
+            dados2.append(vals)
+
+        largura_disp = largura_pais - 2 * margem_pais
+        col_jogador = 3.2 * cm
+        col_extra = 1.6 * cm
+        largura_rodadas = largura_disp - col_jogador - 3 * col_extra
+        col_rodada = max(largura_rodadas / n_rodadas, 0.9 * cm)
+        col_widths = [col_jogador] + [col_rodada] * n_rodadas + [col_extra] * 3
+        fonte = 8 if n_rodadas <= 12 else 6.5
+
+        tabela2 = Table(dados2, colWidths=col_widths, repeatRows=1)
+        tabela2.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), fonte),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("ALIGN", (0, 1), (0, -1), "LEFT"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F2F2")]),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CCCCCC")),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(tabela2)
 
     doc.build(story)
     buffer.seek(0)
