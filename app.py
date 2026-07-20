@@ -21,7 +21,20 @@ from streamlit_autorefresh import st_autorefresh
 # Banner do cabeçalho do PDF (mesma pasta do app.py). Se o arquivo não
 # existir (ex: esqueceu de subir pro GitHub), o PDF usa um título em
 # texto no lugar, sem quebrar.
-BANNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "banner_arena_polese.jpg")
+# Banner do cabeçalho do PDF (mesma pasta do app.py). Aceita qualquer uma
+# dessas extensões — não precisa ser exatamente .jpg — e se nenhum arquivo
+# for encontrado, o PDF usa um título em texto no lugar, sem quebrar.
+def _localizar_banner():
+    pasta = os.path.dirname(os.path.abspath(__file__))
+    nome_base = "banner_arena_polese"
+    for ext in (".jpg", ".jpeg", ".png", ".webp"):
+        caminho = os.path.join(pasta, nome_base + ext)
+        if os.path.exists(caminho):
+            return caminho
+    return None
+
+
+BANNER_PATH = _localizar_banner()
 
 # ============================================================
 # CONFIGURAÇÃO
@@ -300,7 +313,7 @@ def gerar_pdf_classificacao(df, data_torneio_str):
     sub_style = ParagraphStyle("sub", parent=styles["Normal"], fontSize=10, textColor=colors.grey)
 
     story = []
-    if os.path.exists(BANNER_PATH):
+    if BANNER_PATH:
         with PILImage.open(BANNER_PATH) as im:
             largura_px, altura_px = im.size
         proporcao = altura_px / largura_px
