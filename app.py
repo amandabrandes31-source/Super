@@ -1,20 +1,27 @@
 import io
 import json
+import os
 import random
 import threading
 from datetime import datetime, date
 
 import pandas as pd
 import streamlit as st
+from PIL import Image as PILImage
 from reportlab.graphics.shapes import Circle, Drawing, String
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import (BaseDocTemplate, Frame, NextPageTemplate, PageBreak,
+from reportlab.platypus import (BaseDocTemplate, Frame, Image, NextPageTemplate, PageBreak,
                                  PageTemplate, Paragraph, Spacer, Table, TableStyle)
 from streamlit_autorefresh import st_autorefresh
+
+# Banner do cabeçalho do PDF (mesma pasta do app.py). Se o arquivo não
+# existir (ex: esqueceu de subir pro GitHub), o PDF usa um título em
+# texto no lugar, sem quebrar.
+BANNER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "banner_arena_polese.jpg")
 
 # ============================================================
 # CONFIGURAÇÃO
@@ -293,7 +300,16 @@ def gerar_pdf_classificacao(df, data_torneio_str):
     sub_style = ParagraphStyle("sub", parent=styles["Normal"], fontSize=10, textColor=colors.grey)
 
     story = []
-    story.append(Paragraph("Super Arena Polese", titulo_style))
+    if os.path.exists(BANNER_PATH):
+        with PILImage.open(BANNER_PATH) as im:
+            largura_px, altura_px = im.size
+        proporcao = altura_px / largura_px
+        largura_banner = doc.width
+        altura_banner = largura_banner * proporcao
+        story.append(Image(BANNER_PATH, width=largura_banner, height=altura_banner))
+        story.append(Spacer(1, 8))
+    else:
+        story.append(Paragraph("Super Arena Polese", titulo_style))
     story.append(Paragraph("desenvolvido por Amanda Brandes, 2026", autoria_style))
     story.append(Paragraph("Classificação Geral", styles["Heading2"]))
     agora = datetime.now().strftime("%d/%m/%Y às %H:%M")
