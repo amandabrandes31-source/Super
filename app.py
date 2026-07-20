@@ -439,7 +439,7 @@ with st.sidebar:
 # ============================================================
 # TÍTULO
 # ============================================================
-st.title("🎾 Super 12 - Beach Tênis")
+st.title("🎾 Super Arena Polese - Beach Tênis")
 
 if not st.session_state.is_organizer:
     # Atualiza a tela sozinha a cada 15s para quem só está acompanhando,
