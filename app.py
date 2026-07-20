@@ -114,7 +114,8 @@ def montar_partidas_e_folgas(players, pares):
 # CÁLCULO DE CLASSIFICAÇÃO
 # ============================================================
 def calcular_classificacao():
-    stats = {p: {"pontos": 0, "vitorias": 0, "derrotas": 0, "jogos": 0, "saldo": 0, "folgas": 0}
+    stats = {p: {"pontos": 0, "vitorias": 0, "derrotas": 0, "jogos": 0, "saldo": 0,
+                  "melhor_rodada": 0, "folgas": 0}
               for p in shared["players"]}
 
     for rodada in shared["rounds"]:
@@ -133,6 +134,7 @@ def calcular_classificacao():
                 stats[p]["saldo"] += (s1 - s2)
                 stats[p]["vitorias"] += 1 if s1 > s2 else 0
                 stats[p]["derrotas"] += 1 if s1 < s2 else 0
+                stats[p]["melhor_rodada"] = max(stats[p]["melhor_rodada"], s1)
             for p in m["time2"]:
                 if p not in stats:
                     continue
@@ -141,19 +143,20 @@ def calcular_classificacao():
                 stats[p]["saldo"] += (s2 - s1)
                 stats[p]["vitorias"] += 1 if s2 > s1 else 0
                 stats[p]["derrotas"] += 1 if s2 < s1 else 0
+                stats[p]["melhor_rodada"] = max(stats[p]["melhor_rodada"], s2)
 
     df = pd.DataFrame.from_dict(stats, orient="index")
     df.index.name = "Jogador"
-    df = df.sort_values(by=["pontos", "vitorias", "saldo"], ascending=False)
+    df = df.sort_values(by=["pontos", "vitorias", "saldo", "melhor_rodada"], ascending=False)
 
-    # Ranking padrão de esporte: quem empata em pontos/vitórias/saldo fica
-    # na MESMA posição, e a próxima posição distinta pula o número de
-    # jogadores empatados (ex: 1, 2, 2, 2, 5, 6...).
+    # Ranking padrão de esporte: quem empata em TODOS os critérios (pontos,
+    # vitórias, saldo e melhor rodada) fica na MESMA posição, e a próxima
+    # posição distinta pula o número de jogadores empatados (ex: 1, 2, 2, 2, 5, 6...).
     posicoes = []
     chave_anterior = None
     pos_atual = 0
     for i, row in enumerate(df.itertuples(), start=1):
-        chave = (row.pontos, row.vitorias, row.saldo)
+        chave = (row.pontos, row.vitorias, row.saldo, row.melhor_rodada)
         if chave != chave_anterior:
             pos_atual = i
             chave_anterior = chave
@@ -327,12 +330,13 @@ def gerar_pdf_classificacao(df, data_torneio_str):
     # TABELA COMPLETA COM TODAS AS COLUNAS
     df_show = df.reset_index().rename(columns={
         "pontos": "Pontos", "vitorias": "Vitórias", "derrotas": "Derrotas",
-        "jogos": "Jogos", "saldo": "Saldo", "folgas": "Folgas",
+        "jogos": "Jogos", "saldo": "Saldo", "melhor_rodada": "Melhor Rodada", "folgas": "Folgas",
     })
-    colunas = ["Pos", "Jogador", "Pontos", "Vitórias", "Derrotas", "Jogos", "Saldo", "Folgas"]
+    colunas = ["Pos", "Jogador", "Pontos", "Vitórias", "Derrotas", "Jogos", "Saldo", "Melhor Rodada", "Folgas"]
     dados = [colunas] + [[str(row[c]) for c in colunas] for _, row in df_show.iterrows()]
 
-    tabela = Table(dados, colWidths=[1.3 * cm, 4 * cm, 1.8 * cm, 2 * cm, 2 * cm, 1.6 * cm, 1.6 * cm, 1.8 * cm],
+    tabela = Table(dados, colWidths=[1.2 * cm, 3.4 * cm, 1.6 * cm, 1.7 * cm, 1.7 * cm,
+                                       1.3 * cm, 1.3 * cm, 2.5 * cm, 1.4 * cm],
                     repeatRows=1)
     tabela.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
@@ -629,7 +633,7 @@ with aba_class:
         st.dataframe(
             df.rename(columns={
                 "pontos": "Pontos", "vitorias": "Vitórias", "derrotas": "Derrotas",
-                "jogos": "Jogos", "saldo": "Saldo", "folgas": "Folgas"
+                "jogos": "Jogos", "saldo": "Saldo", "melhor_rodada": "Melhor Rodada", "folgas": "Folgas"
             }),
             width='stretch',
             hide_index=True,
