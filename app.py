@@ -19,10 +19,10 @@ from streamlit_autorefresh import st_autorefresh
 # ============================================================
 # CONFIGURAÇÃO
 # ============================================================
-st.set_page_config(page_title="Super 12 - Beach Tênis", page_icon="🎾", layout="centered")
+st.set_page_config(page_title="Super Arena Polese - Beach Tênis", page_icon="🎾", layout="centered")
 
 # Troque esse PIN antes de compartilhar o link do app!
-ORGANIZER_PIN = "1234"
+ORGANIZER_PIN = "2121"
 
 OURO = colors.HexColor("#D4AF37")
 OURO_BORDA = colors.HexColor("#8A6D1F")
