@@ -19,10 +19,10 @@ from streamlit_autorefresh import st_autorefresh
 # ============================================================
 # CONFIGURAÇÃO
 # ============================================================
-st.set_page_config(page_title="Super Arena Polese - Beach Tênis", page_icon="🎾", layout="centered")
+st.set_page_config(page_title="Super Arena Polese", page_icon="🎾", layout="centered")
 
 # Troque esse PIN antes de compartilhar o link do app!
-ORGANIZER_PIN = "2121"
+ORGANIZER_PIN = "1234"
 
 OURO = colors.HexColor("#D4AF37")
 OURO_BORDA = colors.HexColor("#8A6D1F")
@@ -145,7 +145,20 @@ def calcular_classificacao():
     df = pd.DataFrame.from_dict(stats, orient="index")
     df.index.name = "Jogador"
     df = df.sort_values(by=["pontos", "vitorias", "saldo"], ascending=False)
-    df.insert(0, "Pos", range(1, len(df) + 1))
+
+    # Ranking padrão de esporte: quem empata em pontos/vitórias/saldo fica
+    # na MESMA posição, e a próxima posição distinta pula o número de
+    # jogadores empatados (ex: 1, 2, 2, 2, 5, 6...).
+    posicoes = []
+    chave_anterior = None
+    pos_atual = 0
+    for i, row in enumerate(df.itertuples(), start=1):
+        chave = (row.pontos, row.vitorias, row.saldo)
+        if chave != chave_anterior:
+            pos_atual = i
+            chave_anterior = chave
+        posicoes.append(pos_atual)
+    df.insert(0, "Pos", posicoes)
     return df
 
 
@@ -223,10 +236,11 @@ def _medalha(numero, cor_fundo, cor_borda, tamanho=1.5 * cm):
     return d
 
 
-def _coluna_podio(numero, nome, pontos, cor, cor_borda, altura_barra_cm, largura_cm=5.0):
+def _coluna_podio(numero, nomes, pontos, cor, cor_borda, altura_barra_cm, largura_cm=5.0):
     styles = getSampleStyleSheet()
+    tamanho_fonte = 12 if len(nomes) <= 1 else (10 if len(nomes) <= 3 else 9)
     nome_style = ParagraphStyle("nome", parent=styles["Normal"], alignment=TA_CENTER,
-                                 fontName="Helvetica-Bold", fontSize=12, leading=14,
+                                 fontName="Helvetica-Bold", fontSize=tamanho_fonte, leading=tamanho_fonte + 2,
                                  spaceBefore=4, spaceAfter=2)
     pts_style = ParagraphStyle("pts", parent=styles["Normal"], alignment=TA_CENTER,
                                 fontName="Helvetica-Bold", fontSize=11, textColor=colors.white)
@@ -240,7 +254,8 @@ def _coluna_podio(numero, nome, pontos, cor, cor_borda, altura_barra_cm, largura
         ("BOX", (0, 0), (-1, -1), 0.75, cor_borda),
     ]))
 
-    conteudo = [[_medalha(numero, cor, cor_borda)], [Paragraph(nome, nome_style)], [barra]]
+    texto_nomes = "<br/>".join(nomes)
+    conteudo = [[_medalha(numero, cor, cor_borda)], [Paragraph(texto_nomes, nome_style)], [barra]]
     col = Table(conteudo, colWidths=[largura_cm * cm])
     col.setStyle(TableStyle([
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
@@ -269,29 +284,36 @@ def gerar_pdf_classificacao(df, data_torneio_str):
 
     styles = getSampleStyleSheet()
     titulo_style = ParagraphStyle("titulo", parent=styles["Title"], fontSize=20, spaceAfter=2)
+    autoria_style = ParagraphStyle("autoria", parent=styles["Normal"], fontSize=8,
+                                    textColor=colors.HexColor("#BBBBBB"), spaceAfter=10)
     sub_style = ParagraphStyle("sub", parent=styles["Normal"], fontSize=10, textColor=colors.grey)
 
     story = []
-    story.append(Paragraph("Super 12 - Beach Tênis", titulo_style))
+    story.append(Paragraph("Super Arena Polese", titulo_style))
+    story.append(Paragraph("desenvolvido por Amanda Brandes, 2026", autoria_style))
     story.append(Paragraph("Classificação Geral", styles["Heading2"]))
     agora = datetime.now().strftime("%d/%m/%Y às %H:%M")
     story.append(Paragraph(f"Data do torneio: {data_torneio_str}", sub_style))
     story.append(Paragraph(f"PDF gerado em: {agora}", sub_style))
     story.append(Spacer(1, 26))
 
-    # PÓDIO (alturas em degrau: 1º > 2º > 3º) com medalhas numeradas
-    top = df.reset_index().head(3)
-    if len(top) >= 1:
+    # PÓDIO (alturas em degrau: 1º > 2º > 3º) com medalhas numeradas.
+    # Jogadores empatados na mesma posição aparecem juntos no mesmo bloco.
+    df_indexado = df.reset_index()
+    posicoes_distintas = sorted(df_indexado["Pos"].unique())[:3]
+    if posicoes_distintas:
         specs = [
-            (1, OURO, OURO_BORDA, 3.6),
-            (2, PRATA, PRATA_BORDA, 2.6),
-            (3, BRONZE, BRONZE_BORDA, 1.8),
+            (OURO, OURO_BORDA, 3.6),
+            (PRATA, PRATA_BORDA, 2.6),
+            (BRONZE, BRONZE_BORDA, 1.8),
         ]
         blocos = [None, None, None]
-        for i in range(min(3, len(top))):
-            row = top.iloc[i]
-            numero, cor, cor_borda, altura = specs[i]
-            blocos[i] = _coluna_podio(numero, row["Jogador"], int(row["pontos"]), cor, cor_borda, altura)
+        for i, pos_valor in enumerate(posicoes_distintas):
+            grupo = df_indexado[df_indexado["Pos"] == pos_valor]
+            nomes = grupo["Jogador"].tolist()
+            pontos = int(grupo.iloc[0]["pontos"])
+            cor, cor_borda, altura = specs[i]
+            blocos[i] = _coluna_podio(i + 1, nomes, pontos, cor, cor_borda, altura)
 
         ordem = [b for b in [blocos[1], blocos[0], blocos[2]] if b is not None]
         podio_tbl = Table([ordem], colWidths=[5.4 * cm] * len(ordem))
@@ -439,7 +461,7 @@ with st.sidebar:
 # ============================================================
 # TÍTULO
 # ============================================================
-st.title("🎾 Super Arena Polese - Beach Tênis")
+st.title("🎾 Super Arena Polese")
 
 if not st.session_state.is_organizer:
     # Atualiza a tela sozinha a cada 15s para quem só está acompanhando,
