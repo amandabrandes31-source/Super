@@ -149,16 +149,17 @@ def calcular_classificacao():
     df.index.name = "Jogador"
     df = df.sort_values(by=["pontos", "vitorias", "saldo", "melhor_rodada"], ascending=False)
 
-    # Ranking padrão de esporte: quem empata em TODOS os critérios (pontos,
-    # vitórias, saldo e melhor rodada) fica na MESMA posição, e a próxima
-    # posição distinta pula o número de jogadores empatados (ex: 1, 2, 2, 2, 5, 6...).
+    # Ranking denso: quem empata em TODOS os critérios (pontos, vitórias,
+    # saldo e melhor rodada) fica na MESMA posição, mas a posição seguinte
+    # sempre avança de 1 em 1 (ex: 1, 2, 2, 3, 4, 5...) — não pula números
+    # por causa do empate.
     posicoes = []
     chave_anterior = None
     pos_atual = 0
-    for i, row in enumerate(df.itertuples(), start=1):
+    for row in df.itertuples():
         chave = (row.pontos, row.vitorias, row.saldo, row.melhor_rodada)
         if chave != chave_anterior:
-            pos_atual = i
+            pos_atual += 1
             chave_anterior = chave
         posicoes.append(pos_atual)
     df.insert(0, "Pos", posicoes)
