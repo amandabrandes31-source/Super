@@ -7,8 +7,7 @@ from datetime import datetime, date
 
 import pandas as pd
 import streamlit as st
-from PIL import Image as PILImage
-from reportlab.graphics.shapes import Circle, Drawing, String
+from PIL import Image as PILImage, ImageDraw, ImageFont
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
@@ -18,12 +17,9 @@ from reportlab.platypus import (BaseDocTemplate, Frame, Image, NextPageTemplate,
                                  PageTemplate, Paragraph, Spacer, Table, TableStyle)
 from streamlit_autorefresh import st_autorefresh
 
-# Banner do cabeçalho do PDF (mesma pasta do app.py). Se o arquivo não
-# existir (ex: esqueceu de subir pro GitHub), o PDF usa um título em
-# texto no lugar, sem quebrar.
-# Banner do cabeçalho do PDF (mesma pasta do app.py). Aceita qualquer uma
-# dessas extensões — não precisa ser exatamente .jpg — e se nenhum arquivo
-# for encontrado, o PDF usa um título em texto no lugar, sem quebrar.
+# Banner do cabeçalho do PDF e do app (mesma pasta do app.py). Aceita
+# qualquer uma dessas extensões — não precisa ser exatamente .jpg — e se
+# nenhum arquivo for encontrado, cai para um título em texto, sem quebrar.
 def _localizar_banner():
     pasta = os.path.dirname(os.path.abspath(__file__))
     nome_base = "banner_arena_polese"
@@ -50,6 +46,10 @@ PRATA = colors.HexColor("#A8A9AD")
 PRATA_BORDA = colors.HexColor("#6E6F72")
 BRONZE = colors.HexColor("#AD8A56")
 BRONZE_BORDA = colors.HexColor("#7A5F3B")
+
+LARANJA_MARCA = colors.HexColor("#B16C21")  # extraída do logo (texto "POLESE")
+
+EMOJI_FONT_PATH = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
 
 # ============================================================
 # ESTADO COMPARTILHADO
@@ -251,7 +251,29 @@ def montar_tabela_historico():
 # ============================================================
 # EXPORTAÇÃO EM PDF DA CLASSIFICAÇÃO (pódio + tabela + histórico)
 # ============================================================
-def _medalha(numero, cor_fundo, cor_borda, tamanho=1.5 * cm):
+def _caminho_medalha(numero):
+    pasta = os.path.dirname(os.path.abspath(__file__))
+    nomes = {1: "ouro", 2: "prata", 3: "bronze"}
+    nome = nomes.get(numero)
+    if not nome:
+        return None
+    caminho = os.path.join(pasta, f"medalha_{nome}.png")
+    return caminho if os.path.exists(caminho) else None
+
+
+def _medalha(numero, cor_fundo, cor_borda, tamanho=1.1 * cm):
+    """Usa a imagem real do emoji de medalha (🥇🥈🥉), pré-renderizada como
+    PNG (a fonte do PDF não tem suporte a emoji colorido). Se o arquivo de
+    imagem não estiver no repositório, cai para um círculo numerado como
+    alternativa, sem quebrar o relatório."""
+    caminho = _caminho_medalha(numero)
+    if caminho:
+        with PILImage.open(caminho) as im:
+            largura_px, altura_px = im.size
+        altura = tamanho * (altura_px / largura_px)
+        return Image(caminho, width=tamanho, height=altura)
+
+    from reportlab.graphics.shapes import Circle, Drawing, String
     d = Drawing(tamanho, tamanho)
     d.add(Circle(tamanho / 2, tamanho / 2, tamanho / 2 - 2,
                   fillColor=cor_fundo, strokeColor=cor_borda, strokeWidth=2.2))
@@ -296,13 +318,36 @@ def gerar_pdf_classificacao(df, data_torneio_str):
                            topMargin=1.5 * cm, bottomMargin=1.5 * cm,
                            leftMargin=1.5 * cm, rightMargin=1.5 * cm)
 
-    frame_retrato = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="retrato")
+    largura_pagina_retrato, altura_pagina_retrato = A4
+    altura_banner_full = 0
+    onpage_retrato = lambda canvas_obj, doc_obj: None
+
+    if BANNER_PATH:
+        with PILImage.open(BANNER_PATH) as im:
+            largura_px, altura_px = im.size
+        proporcao = altura_px / largura_px
+        altura_banner_full = largura_pagina_retrato * proporcao
+
+        def _desenhar_banner(canvas_obj, doc_obj, _altura=altura_banner_full):
+            # Desenha a imagem colada nas bordas (sem padding no topo/laterais),
+            # direto no canvas da página — por isso fica fora do Frame, que
+            # sempre respeita as margens do documento.
+            canvas_obj.saveState()
+            canvas_obj.drawImage(BANNER_PATH, 0, altura_pagina_retrato - _altura,
+                                  width=largura_pagina_retrato, height=_altura,
+                                  mask="auto")
+            canvas_obj.restoreState()
+
+        onpage_retrato = _desenhar_banner
+
+    frame_retrato = Frame(doc.leftMargin, doc.bottomMargin, doc.width,
+                           doc.height - altura_banner_full, id="retrato")
     largura_pais, altura_pais = landscape(A4)
     margem_pais = 1.3 * cm
     frame_paisagem = Frame(margem_pais, margem_pais, largura_pais - 2 * margem_pais,
                             altura_pais - 2 * margem_pais, id="paisagem")
     doc.addPageTemplates([
-        PageTemplate(id="Retrato", frames=[frame_retrato], pagesize=A4),
+        PageTemplate(id="Retrato", frames=[frame_retrato], pagesize=A4, onPage=onpage_retrato),
         PageTemplate(id="Paisagem", frames=[frame_paisagem], pagesize=landscape(A4)),
     ])
 
@@ -313,15 +358,7 @@ def gerar_pdf_classificacao(df, data_torneio_str):
     sub_style = ParagraphStyle("sub", parent=styles["Normal"], fontSize=10, textColor=colors.grey)
 
     story = []
-    if BANNER_PATH:
-        with PILImage.open(BANNER_PATH) as im:
-            largura_px, altura_px = im.size
-        proporcao = altura_px / largura_px
-        largura_banner = doc.width
-        altura_banner = largura_banner * proporcao
-        story.append(Image(BANNER_PATH, width=largura_banner, height=altura_banner))
-        story.append(Spacer(1, 8))
-    else:
+    if not BANNER_PATH:
         story.append(Paragraph("Super Arena Polese", titulo_style))
     story.append(Paragraph("desenvolvido por Amanda Brandes, 2026", autoria_style))
     story.append(Paragraph("Classificação Geral", styles["Heading2"]))
@@ -365,20 +402,21 @@ def gerar_pdf_classificacao(df, data_torneio_str):
     colunas = ["Pos", "Jogador", "Pontos", "Vitórias", "Derrotas", "Jogos", "Saldo", "Melhor Rodada", "Folgas"]
     dados = [colunas] + [[str(row[c]) for c in colunas] for _, row in df_show.iterrows()]
 
-    tabela = Table(dados, colWidths=[1.2 * cm, 3.4 * cm, 1.6 * cm, 1.7 * cm, 1.7 * cm,
-                                       1.3 * cm, 1.3 * cm, 2.5 * cm, 1.4 * cm],
+    tabela = Table(dados, colWidths=[1.2 * cm, 3.2 * cm, 1.6 * cm, 1.7 * cm, 1.7 * cm,
+                                       1.4 * cm, 1.6 * cm, 2.8 * cm, 1.4 * cm],
                     repeatRows=1)
     tabela.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
+        ("BACKGROUND", (0, 0), (-1, 0), LARANJA_MARCA),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("FONTSIZE", (0, 0), (-1, -1), 10.5),
+        ("FONTSIZE", (0, 0), (-1, 0), 11),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("ALIGN", (1, 1), (1, -1), "LEFT"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F2F2")]),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]))
     story.append(tabela)
 
@@ -405,11 +443,11 @@ def gerar_pdf_classificacao(df, data_torneio_str):
         largura_rodadas = largura_disp - col_jogador - 3 * col_extra
         col_rodada = max(largura_rodadas / n_rodadas, 0.9 * cm)
         col_widths = [col_jogador] + [col_rodada] * n_rodadas + [col_extra] * 3
-        fonte = 8 if n_rodadas <= 12 else 6.5
+        fonte = 9.5 if n_rodadas <= 12 else 7.5
 
         tabela2 = Table(dados2, colWidths=col_widths, repeatRows=1)
         tabela2.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
+            ("BACKGROUND", (0, 0), (-1, 0), LARANJA_MARCA),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTSIZE", (0, 0), (-1, -1), fonte),
@@ -417,8 +455,8 @@ def gerar_pdf_classificacao(df, data_torneio_str):
             ("ALIGN", (0, 1), (0, -1), "LEFT"),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F2F2")]),
             ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CCCCCC")),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ]))
         story.append(tabela2)
 
@@ -479,6 +517,9 @@ with st.sidebar:
 
     st.divider()
     st.subheader("💾 Backup")
+    st.caption("Recomendado: baixe um backup depois de cada rodada. Se o app "
+               "reiniciar (dormir por inatividade ou um novo deploy), os dados "
+               "em memória se perdem — o backup é sua rede de segurança.")
     st.download_button(
         "Baixar backup (JSON)",
         data=exportar_backup(),
@@ -495,7 +536,10 @@ with st.sidebar:
 # ============================================================
 # TÍTULO
 # ============================================================
-st.title("🎾 Super Arena Polese")
+if BANNER_PATH:
+    st.image(BANNER_PATH, width="stretch")
+else:
+    st.title("🎾 Super Arena Polese")
 
 if not st.session_state.is_organizer:
     # Atualiza a tela sozinha a cada 15s para quem só está acompanhando,
@@ -598,6 +642,21 @@ if st.session_state.is_organizer:
 if st.session_state.is_organizer:
     with aba_placar:
         st.subheader("Registrar placar")
+
+        # Fonte maior só nos campos de placar (essa tab é a única que usa
+        # number_input no app, então o CSS abaixo não afeta mais nada).
+        st.markdown("""
+            <style>
+            div[data-testid="stNumberInput"] input {
+                font-size: 1.5rem !important;
+                height: 3rem !important;
+            }
+            div[data-testid="stNumberInput"] label p {
+                font-size: 1.05rem !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+
         if not shared["rounds"]:
             st.info("Gere uma rodada primeiro na aba 'Gerar Rodada'.")
         else:
@@ -607,19 +666,22 @@ if st.session_state.is_organizer:
             partidas = shared["rounds"][idx]["partidas"]
 
             for j, m in enumerate(partidas):
-                st.markdown(f"**Quadra {m['quadra']}**")
+                st.markdown(f"<h3 style='margin-bottom:0.3rem'>Quadra {m['quadra']}</h3>",
+                            unsafe_allow_html=True)
                 c1, c2, c3 = st.columns([2, 1, 2])
                 with c1:
-                    st.write(" / ".join(m["time1"]))
+                    st.markdown(f"<p style='font-size:1.2rem; font-weight:600'>{' / '.join(m['time1'])}</p>",
+                                unsafe_allow_html=True)
                     p1 = st.number_input(
                         "Pontos", min_value=0, max_value=99,
                         value=m["placar1"] if m["placar1"] is not None else 0,
                         key=f"p1_{idx}_{j}"
                     )
                 with c2:
-                    st.write("×")
+                    st.markdown("<p style='font-size:1.4rem; text-align:center'>×</p>", unsafe_allow_html=True)
                 with c3:
-                    st.write(" / ".join(m["time2"]))
+                    st.markdown(f"<p style='font-size:1.2rem; font-weight:600'>{' / '.join(m['time2'])}</p>",
+                                unsafe_allow_html=True)
                     p2 = st.number_input(
                         "Pontos", min_value=0, max_value=99,
                         value=m["placar2"] if m["placar2"] is not None else 0,
@@ -631,6 +693,8 @@ if st.session_state.is_organizer:
 
             if st.button("💾 Salvar placares desta rodada"):
                 st.success("Placares salvos!")
+                st.info("💡 Dica: baixe um backup na barra lateral agora — protege esses "
+                        "placares caso o app precise reiniciar.")
 
 # ============================================================
 # ABA HISTÓRICO (todo mundo vê)
