@@ -37,6 +37,34 @@ BANNER_PATH = _localizar_banner()
 # ============================================================
 st.set_page_config(page_title="Super Arena Polese", page_icon="🎾", layout="centered")
 
+# PWA: faz o app abrir em tela cheia (sem barra de endereço do Safari) e com
+# ícone próprio quando adicionado à Tela de Início. Precisa da pasta static/
+# no repositório e de `enableStaticServing = true` no .streamlit/config.toml.
+st.iframe("""
+<script>
+(function() {
+    const head = window.parent.document.head;
+    const add = (tag, attrs) => {
+        const el = window.parent.document.createElement(tag);
+        Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+        head.appendChild(el);
+    };
+    if (!head.querySelector('link[rel="manifest"]')) {
+        add('link', {rel: 'manifest', href: 'app/static/manifest.json'});
+    }
+    if (!head.querySelector('link[rel="apple-touch-icon"]')) {
+        add('link', {rel: 'apple-touch-icon', href: 'app/static/icon-192.png'});
+    }
+    if (!head.querySelector('meta[name="apple-mobile-web-app-capable"]')) {
+        add('meta', {name: 'apple-mobile-web-app-capable', content: 'yes'});
+        add('meta', {name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent'});
+        add('meta', {name: 'apple-mobile-web-app-title', content: 'Arena Polese'});
+        add('meta', {name: 'theme-color', content: '#B16C21'});
+    }
+})();
+</script>
+""", height=1)
+
 # Troque esse PIN antes de compartilhar o link do app!
 ORGANIZER_PIN = "1234"
 
@@ -75,6 +103,13 @@ shared = get_shared_state()
 # cada visitante decide individualmente se está logado como organizador.
 if "is_organizer" not in st.session_state:
     st.session_state.is_organizer = False
+
+# Login automático via link: acessando o app com ?pin=SEU_PIN na URL, você
+# entra direto como organizador, sem digitar o PIN toda vez. Use esse link
+# (com o pin) só no SEU aparelho — quem só tem o link normal (sem ?pin=)
+# continua caindo no modo visualizador.
+if not st.session_state.is_organizer and st.query_params.get("pin") == ORGANIZER_PIN:
+    st.session_state.is_organizer = True
 
 
 # ============================================================
@@ -500,6 +535,9 @@ with st.sidebar:
                 st.rerun()
             else:
                 st.error("PIN incorreto.")
+        st.caption("💡 Dica: adicione `?pin=SEU_PIN` no final do link do app e "
+                   "salve esse link (ex: na Tela de Início) pra entrar direto, "
+                   "sem digitar toda vez. Use isso só no seu aparelho.")
     else:
         st.success("Modo organizador ativo")
         if st.button("Sair do modo organizador"):
